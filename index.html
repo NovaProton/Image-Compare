@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image Compare</title>
+<meta name="description" content="Check whether two images are byte-identical and pixel-identical. Runs entirely in your browser; nothing is uploaded.">
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1f24; --muted: #646a75;
+    --line: #dddad3; --accent: #2f4a73; --same: #1f7a4d; --same-bg: #e3f3ea;
+    --diff: #b3261e; --diff-bg: #fbe7e5; --drop: #eef1f6;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #15171b; --panel: #1e2126; --ink: #e8e9ec; --muted: #9aa0ab;
+      --line: #33373e; --accent: #8fb0e0; --same: #6fd09e; --same-bg: #183527;
+      --diff: #ff8a80; --diff-bg: #3d1d1b; --drop: #23272e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1000px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  .lede { color: var(--muted); margin: 0 0 24px; }
+  .drops { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 640px) { .drops { grid-template-columns: 1fr; } }
+  .drop {
+    position: relative; background: var(--drop); border: 2px dashed var(--line);
+    border-radius: 10px; min-height: 180px; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 12px; text-align: center;
+    cursor: pointer; overflow: hidden;
+  }
+  .drop.over { border-color: var(--accent); }
+  .drop:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .drop input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .drop img { max-width: 100%; max-height: 220px; border-radius: 6px; display: block; }
+  .drop .label { font-weight: 600; }
+  .drop .name { font-size: .85rem; color: var(--muted); margin-top: 6px; word-break: break-all; }
+  .verdict {
+    margin: 24px 0 16px; padding: 16px 18px; border-radius: 10px; font-weight: 700;
+    font-size: 1.15rem; display: none;
+  }
+  .verdict.same { display: block; background: var(--same-bg); color: var(--same); }
+  .verdict.diff { display: block; background: var(--diff-bg); color: var(--diff); }
+  .verdict small { display: block; font-weight: 400; font-size: .9rem; color: var(--ink); margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { width: 38%; font-weight: 500; color: var(--muted); }
+  td { font-variant-numeric: tabular-nums; }
+  .mono { font-family: var(--mono); font-size: .8rem; word-break: break-all; }
+  #results { display: none; }
+  .diffwrap { margin-top: 24px; display: none; }
+  .diffwrap h2 { font-size: 1.05rem; margin: 0 0 4px; }
+  .diffwrap p { color: var(--muted); margin: 0 0 10px; font-size: .9rem; }
+  canvas { max-width: 100%; height: auto; border-radius: 8px; background: #000; display: block; }
+  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; font-size: .9rem; }
+  footer { margin-top: 40px; color: var(--muted); font-size: .85rem; }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Image Compare</h1>
+  <p class="lede">Drop in two images to check whether they’re byte-identical and pixel-identical. Everything runs in your browser and nothing is uploaded.</p>
+
+  <div class="drops">
+    <label class="drop" id="dropA">
+      <input type="file" accept="image/*" data-slot="0" aria-label="Choose image A">
+      <span class="label">Image A</span><span class="name">Drop or click to choose</span>
+    </label>
+    <label class="drop" id="dropB">
+      <input type="file" accept="image/*" data-slot="1" aria-label="Choose image B">
+      <span class="label">Image B</span><span class="name">Drop or click to choose</span>
+    </label>
+  </div>
+
+  <div class="verdict" id="verdict" role="status" aria-live="polite"></div>
+
+  <table id="results">
+    <tbody>
+      <tr><th>SHA-256 A</th><td class="mono" id="hashA"></td></tr>
+      <tr><th>SHA-256 B</th><td class="mono" id="hashB"></td></tr>
+      <tr><th>Files byte-identical</th><td id="bytes"></td></tr>
+      <tr><th>Dimensions A / B</th><td id="dims"></td></tr>
+      <tr><th>Pixels compared</th><td id="total"></td></tr>
+      <tr><th>Pixels that differ</th><td id="changed"></td></tr>
+      <tr><th>…by more than 10</th><td id="over10"></td></tr>
+      <tr><th>…by more than 30</th><td id="over30"></td></tr>
+      <tr><th>Largest channel difference</th><td id="maxd"></td></tr>
+      <tr><th>Changed region (x1, y1, x2, y2)</th><td id="bbox"></td></tr>
+    </tbody>
+  </table>
+
+  <div class="diffwrap" id="diffwrap">
+    <h2>Difference map</h2>
+    <p>Brighter means a bigger difference. Pure black means that pixel matches exactly.</p>
+    <div class="controls">
+      <label for="amp">Amplify</label>
+      <input type="range" id="amp" min="1" max="50" value="10">
+      <span id="ampVal">×10</span>
+    </div>
+    <canvas id="diffCanvas"></canvas>
+  </div>
+
+  <footer>
+    Browsers decode images in sRGB, so for colour-managed files the pixel values may differ slightly from the Python result.
+    The SHA-256 check is exact either way.
+  </footer>
+</main>
+
+<script>
+const slots = [null, null];          // { file, bytes, img }
+let lastDiff = null;                 // { per, w, h }
+
+const $ = id => document.getElementById(id);
+const fmt = n => n.toLocaleString("en-GB");
+
+async function sha256(buf) {
+  const h = await crypto.subtle.digest("SHA-256", buf);
+  return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function loadImage(blob) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => res({ img, url });
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error("Couldn’t decode that image")); };
+    img.src = url;
+  });
+}
+
+function pixels(img) {
+  const c = document.createElement("canvas");
+  c.width = img.naturalWidth; c.height = img.naturalHeight;
+  const ctx = c.getContext("2d", { willReadFrequently: true, colorSpace: "srgb" });
+  ctx.drawImage(img, 0, 0);
+  return ctx.getImageData(0, 0, c.width, c.height).data;
+}
+
+async function setSlot(i, file) {
+  if (!file) return;
+  const drop = i === 0 ? $("dropA") : $("dropB");
+  try {
+    const bytes = await file.arrayBuffer();
+    const { img, url } = await loadImage(file);
+    if (slots[i]?.url) URL.revokeObjectURL(slots[i].url);
+    slots[i] = { file, bytes, img, url };
+    drop.querySelectorAll("img").forEach(n => n.remove());
+    const preview = document.createElement("img");
+    preview.src = url; preview.alt = "";
+    drop.insertBefore(preview, drop.querySelector(".label"));
+    drop.querySelector(".name").textContent =
+      `${file.name} · ${img.naturalWidth}×${img.naturalHeight}`;
+  } catch (e) {
+    drop.querySelector(".name").textContent = e.message;
+    slots[i] = null;
+  }
+  if (slots[0] && slots[1]) run();
+}
+
+async function run() {
+  const [a, b] = slots;
+  const [ha, hb] = await Promise.all([sha256(a.bytes), sha256(b.bytes)]);
+  $("results").style.display = "table";
+  $("hashA").textContent = ha;
+  $("hashB").textContent = hb;
+  $("bytes").textContent = ha === hb ? "Yes" : "No";
+
+  const wa = a.img.naturalWidth, hA = a.img.naturalHeight;
+  const wb = b.img.naturalWidth, hB = b.img.naturalHeight;
+  $("dims").textContent = `${wa}×${hA} / ${wb}×${hB}`;
+
+  const v = $("verdict");
+  const blank = ["total", "changed", "over10", "over30", "maxd", "bbox"];
+
+  if (wa !== wb || hA !== hB) {
+    blank.forEach(id => $(id).textContent = "—");
+    v.className = "verdict diff";
+    v.innerHTML = "Different<small>The dimensions don’t match, so a pixel comparison isn’t possible.</small>";
+    $("diffwrap").style.display = "none";
+    return;
+  }
+
+  const pa = pixels(a.img), pb = pixels(b.img);
+  const total = wa * hA;
+  const per = new Uint8Array(total);
+  let changed = 0, o10 = 0, o30 = 0, maxd = 0;
+  let x1 = Infinity, y1 = Infinity, x2 = -1, y2 = -1;
+
+  for (let p = 0, k = 0; p < total; p++, k += 4) {
+    const d = Math.max(
+      Math.abs(pa[k] - pb[k]), Math.abs(pa[k+1] - pb[k+1]),
+      Math.abs(pa[k+2] - pb[k+2]), Math.abs(pa[k+3] - pb[k+3]));
+    per[p] = d;
+    if (d) {
+      changed++;
+      if (d > 10) o10++;
+      if (d > 30) o30++;
+      if (d > maxd) maxd = d;
+      const x = p % wa, y = (p / wa) | 0;
+      if (x < x1) x1 = x; if (x > x2) x2 = x;
+      if (y < y1) y1 = y; if (y > y2) y2 = y;
+    }
+  }
+
+  $("total").textContent = fmt(total);
+  $("changed").textContent = `${fmt(changed)} (${(changed / total * 100).toFixed(4)}%)`;
+  $("over10").textContent = fmt(o10);
+  $("over30").textContent = fmt(o30);
+  $("maxd").textContent = `${maxd} (out of 255)`;
+  $("bbox").textContent = changed ? `(${x1}, ${y1}, ${x2 + 1}, ${y2 + 1})` : "None";
+
+  if (changed === 0) {
+    v.className = "verdict same";
+    v.innerHTML = ha === hb
+      ? "Identical<small>The files are byte-for-byte the same, so every pixel matches too.</small>"
+      : "Identical pixels<small>Every pixel matches. The file bytes differ, probably because of metadata or compression.</small>";
+    $("diffwrap").style.display = "none";
+  } else {
+    v.className = "verdict diff";
+    v.innerHTML = `Different<small>${fmt(changed)} of ${fmt(total)} pixels differ.</small>`;
+    lastDiff = { per, w: wa, h: hA };
+    drawDiff();
+    $("diffwrap").style.display = "block";
+  }
+}
+
+function drawDiff() {
+  if (!lastDiff) return;
+  const { per, w, h } = lastDiff;
+  const amp = +$("amp").value;
+  $("ampVal").textContent = `×${amp}`;
+  const c = $("diffCanvas");
+  c.width = w; c.height = h;
+  const ctx = c.getContext("2d");
+  const out = ctx.createImageData(w, h);
+  for (let p = 0, k = 0; p < per.length; p++, k += 4) {
+    const val = Math.min(255, per[p] * amp);
+    out.data[k] = out.data[k+1] = out.data[k+2] = val;
+    out.data[k+3] = 255;
+  }
+  ctx.putImageData(out, 0, 0);
+}
+
+document.querySelectorAll(".drop input").forEach(inp => {
+  const i = +inp.dataset.slot;
+  const drop = inp.closest(".drop");
+  inp.addEventListener("change", () => setSlot(i, inp.files[0]));
+  ["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); drop.classList.add("over");
+  }));
+  ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, () => drop.classList.remove("over")));
+  drop.addEventListener("drop", e => { e.preventDefault(); setSlot(i, e.dataTransfer.files[0]); });
+});
+$("amp").addEventListener("input", drawDiff);
+</script>
+</body>
+</html>
