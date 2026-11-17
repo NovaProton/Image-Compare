@@ -44,12 +44,6 @@ Matching hashes mean identical images. Different hashes **don't** always mean di
 - The browser decodes images into sRGB, so for colour-managed files (such as those with embedded ICC profiles) pixel values can be very slightly off. The SHA-256 check is always exact.
 - The image formats you can use are whatever your browser supports (PNG, JPEG, WebP, GIF, AVIF, etc.).
 
-## Hosting on GitHub Pages
-
-1. Add `index.html` (and this README) to a repository.
-2. Go to **Settings → Pages → Build and deployment**, choose **Deploy from a branch**, and select `main` / `(root)`.
-3. After a minute or so it will be live at `https://<username>.github.io/<repo>/`.
-
 ## Quick check without the page
 
 If you only need to know whether two files are identical:
